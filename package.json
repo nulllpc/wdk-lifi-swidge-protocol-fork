@@ -82,6 +82,9 @@
       "default": "./package.json"
     }
   },
+  "overrides": {
+    "ws@<8.21.1": "8.21.1"
+  },
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
