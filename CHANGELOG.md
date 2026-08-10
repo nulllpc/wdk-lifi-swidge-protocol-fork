@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+### Patch Changes
+
+- [`a5a3be7`](https://github.com/lifinance/wdk-lifi-swidge-protocol/commit/a5a3be77a23e8c5d92b5a8a552c224c11ea44391) Thanks [@brucexu-eth](https://github.com/brucexu-eth)! - Batch ERC-4337 allowance reset, approval, and LI.FI bridge calls into one UserOperation. This prevents bridge submission from racing a pending approval with the same account nonce (`AA25 invalid account nonce`) and avoids leaving a standalone approval behind when batch estimation fails.
+
 ## 0.5.1
 
 ### Patch Changes
