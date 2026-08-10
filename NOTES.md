@@ -71,7 +71,7 @@ This also fires automatically when the base class `bridge()` delegation calls `s
 
 ## ERC-20 approval handling
 
-`_handleApproval` runs inside every `swidge()` call before the bridge transaction. Four outcomes:
+Every `swidge()` call determines the required approval calls with `_buildApprovalTxs` before submitting the source operation. There are four outcomes:
 
 1. **Skip** — LI.FI's `skipApproval` flag is set (native tokens, some CCTP routes).
 2. **Already approved** — current on-chain allowance ≥ amount. No transaction.
@@ -80,7 +80,9 @@ This also fires automatically when the base class `bridge()` delegation calls `s
 
 **Why exact amount, not infinite:** An upgradeable bridge contract with `type(uint256).max` approval is a standing permission to drain the wallet. Exact-amount approval limits exposure to only the tokens in the current operation.
 
-**Why we wait for confirmation:** After each approval tx, we call `provider.waitForTransaction` before sending the bridge tx. Without it, the bridge arrives on-chain before the allowance is confirmed and the LI.FI Diamond's `safeTransferFrom` reverts. ERC-4337 accounts skip the wait — the bundler handles confirmation ordering internally. For the same reason, ERC-4337 transactions are wrapped in an array (`account.sendTransaction([tx], config)`) rather than sent directly.
+**EOA confirmation:** `_handleApproval` sends each required approval as a separate transaction and calls `provider.waitForTransaction` before sending the next approval or the bridge transaction. Without the wait, the LI.FI Diamond can execute `safeTransferFrom` before the allowance is confirmed.
+
+**ERC-4337 batching:** ERC-4337 accounts submit the optional allowance reset, approval, and bridge call together with `account.sendTransaction([...approvalTxs, bridgeTx], config)`. Previously, approval and bridge calls were submitted as separate UserOperations without waiting for the first one to be included. Both could be estimated with the same Safe nonce, causing the bundler to reject the bridge operation with `AA25 invalid account nonce`. Sending one ordered Safe batch removes that nonce race, executes all calls atomically, and avoids leaving an approval behind when bridge estimation fails.
 
 **Approval address comes from the quote** (`estimate.approvalAddress`), never hardcoded. LI.FI deploys the Diamond to different addresses on some chains.
 
@@ -88,7 +90,7 @@ This also fires automatically when the base class `bridge()` delegation calls `s
 
 ## Account type detection — why we don't use instanceof
 
-Two things depend on account type: the `_isWritableAccount` guard on `swidge()` and the `_isErc4337Account` branch that wraps transactions in an array. The obvious approach — `instanceof WalletAccountEvmErc4337` — breaks when the same package resolves to two different module instances in a monorepo (workspace root vs nested `node_modules`). JavaScript compares constructor identity in memory, so two installs of identical source produce two different constructor objects and `instanceof` returns `false` for valid accounts.
+Two things depend on account type: the `_isWritableAccount` guard on `swidge()` and the `_isErc4337Account` branch that batches approval and bridge calls into one UserOperation. The obvious approach — `instanceof WalletAccountEvmErc4337` — breaks when the same package resolves to two different module instances in a monorepo (workspace root vs nested `node_modules`). JavaScript compares constructor identity in memory, so two installs of identical source produce two different constructor objects and `instanceof` returns `false` for valid accounts.
 
 We walk the prototype chain and compare constructor names as strings instead:
 
@@ -152,7 +154,7 @@ Defaults: 30s timeout per attempt, 1 retry (mirrors the SDK's `requestSettings.r
 
 ## Quote transaction validation
 
-`validateQuoteTransaction` runs in `swidge()` after the fee-cap check and **before `_handleApproval`** — an untrusted target must be rejected before any allowance is granted, not merely before the bridge tx.
+`validateQuoteTransaction` runs in `swidge()` after the fee-cap check and **before approval handling starts** — an untrusted target must be rejected before any allowance is built or sent, not merely before the bridge call.
 
 Structural checks always run: `transactionRequest.to` must be a valid address, `data` must be hex, `value`/`gasLimit` must parse as BigInt. These are free and cannot false-positive.
 

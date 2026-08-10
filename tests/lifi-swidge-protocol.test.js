@@ -1120,32 +1120,29 @@ describe('@lifi/wdk-protocol-swidge-lifi', () => {
     describe('swidge', () => {
       beforeEach(() => {
         allowanceMock.mockResolvedValue(0n)
-        account.sendTransaction = jest.fn()
-          .mockResolvedValueOnce({ hash: 'dummy-approve-hash' })
-          .mockResolvedValueOnce({ hash: 'dummy-bridge-hash' })
+        account.sendTransaction = jest.fn().mockResolvedValue({ hash: 'dummy-batch-hash' })
       })
 
-      test('wraps approval transaction in an array for ERC-4337', async () => {
-        await protocol.swidge({
+      test('submits approval and bridge in one ordered ERC-4337 batch', async () => {
+        const result = await protocol.swidge({
           fromToken: TOKEN, toToken: TOKEN, toChain: 'arbitrum', fromTokenAmount: 1_000_000n
         })
 
-        const approveCall = account.sendTransaction.mock.calls[0][0]
-        expect(approveCall).toEqual([{ to: TOKEN, data: EXPECTED_APPROVE_DATA }])
-      })
-
-      test('wraps bridge transaction in an array for ERC-4337', async () => {
-        await protocol.swidge({
-          fromToken: TOKEN, toToken: TOKEN, toChain: 'arbitrum', fromTokenAmount: 1_000_000n
-        })
-
-        const bridgeCall = account.sendTransaction.mock.calls[1][0]
-        expect(bridgeCall).toEqual([{
-          to: APPROVAL_ADDRESS,
-          data: DUMMY_QUOTE.transactionRequest.data,
-          value: 0n,
-          gasLimit: 300_000n
-        }])
+        expect(account.sendTransaction).toHaveBeenCalledTimes(1)
+        expect(account.sendTransaction).toHaveBeenCalledWith([
+          { to: TOKEN, data: EXPECTED_APPROVE_DATA },
+          {
+            to: APPROVAL_ADDRESS,
+            data: DUMMY_QUOTE.transactionRequest.data,
+            value: 0n,
+            gasLimit: 300_000n
+          }
+        ], undefined)
+        expect(result.id).toBe('dummy-batch-hash')
+        expect(result.hash).toBe('dummy-batch-hash')
+        expect(result.transactions).toEqual([
+          { hash: 'dummy-batch-hash', chain: 1, type: 'source' }
+        ])
       })
 
       test('sends no route filters in the quote request by default', async () => {
@@ -1161,25 +1158,80 @@ describe('@lifi/wdk-protocol-swidge-lifi', () => {
 
       test('resets allowance before approving when non-zero allowance exists', async () => {
         allowanceMock.mockResolvedValue(500n)
-        account.sendTransaction = jest.fn()
-          .mockResolvedValueOnce({ hash: 'dummy-reset-hash' })
-          .mockResolvedValueOnce({ hash: 'dummy-approve-hash' })
-          .mockResolvedValueOnce({ hash: 'dummy-bridge-hash' })
 
         const result = await protocol.swidge({
           fromToken: TOKEN, toToken: TOKEN, toChain: 'arbitrum', fromTokenAmount: 1_000_000n
         })
 
-        expect(account.sendTransaction).toHaveBeenCalledTimes(3)
-        const resetCall = account.sendTransaction.mock.calls[0][0]
-        expect(resetCall).toEqual([{ to: TOKEN, data: EXPECTED_RESET_DATA }])
-
-        const approvalTxs = result.transactions.filter(t => t.type === 'approval')
-        expect(approvalTxs[0].hash).toBe('dummy-reset-hash')
-        expect(approvalTxs[1].hash).toBe('dummy-approve-hash')
+        expect(account.sendTransaction).toHaveBeenCalledTimes(1)
+        expect(account.sendTransaction.mock.calls[0][0]).toEqual([
+          { to: TOKEN, data: EXPECTED_RESET_DATA },
+          { to: TOKEN, data: EXPECTED_APPROVE_DATA },
+          {
+            to: APPROVAL_ADDRESS,
+            data: DUMMY_QUOTE.transactionRequest.data,
+            value: 0n,
+            gasLimit: 300_000n
+          }
+        ])
+        expect(result.transactions).toEqual([
+          { hash: 'dummy-batch-hash', chain: 1, type: 'source' }
+        ])
       })
 
-      test('does not wait for transaction after approval (ERC-4337 batches internally)', async () => {
+      test('submits only the bridge call when allowance is already sufficient', async () => {
+        allowanceMock.mockResolvedValue(1_000_000n)
+
+        await protocol.swidge({
+          fromToken: TOKEN, toToken: TOKEN, toChain: 'arbitrum', fromTokenAmount: 1_000_000n
+        })
+
+        expect(account.sendTransaction).toHaveBeenCalledTimes(1)
+        expect(account.sendTransaction.mock.calls[0][0]).toEqual([{
+          to: APPROVAL_ADDRESS,
+          data: DUMMY_QUOTE.transactionRequest.data,
+          value: 0n,
+          gasLimit: 300_000n
+        }])
+      })
+
+      test('submits only the bridge call without reading allowance when approval is skipped', async () => {
+        global.fetch = jest.fn().mockImplementation((url) => {
+          if (url.includes('/tokens')) return Promise.resolve({ ok: true, json: async () => DUMMY_TOKENS })
+          if (url.includes('/token')) return Promise.resolve({ ok: true, json: async () => DUMMY_SOURCE_TOKEN })
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ...DUMMY_QUOTE, estimate: { ...DUMMY_QUOTE.estimate, skipApproval: true } })
+          })
+        })
+        allowanceMock.mockClear()
+
+        await protocol.swidge({
+          fromToken: TOKEN, toToken: TOKEN, toChain: 'arbitrum', fromTokenAmount: 1_000_000n
+        })
+
+        expect(allowanceMock).not.toHaveBeenCalled()
+        expect(account.sendTransaction).toHaveBeenCalledTimes(1)
+        expect(account.sendTransaction.mock.calls[0][0]).toEqual([{
+          to: APPROVAL_ADDRESS,
+          data: DUMMY_QUOTE.transactionRequest.data,
+          value: 0n,
+          gasLimit: 300_000n
+        }])
+      })
+
+      test('does not submit a standalone approval when batch submission fails', async () => {
+        account.sendTransaction.mockRejectedValueOnce(new Error('batch estimation failed'))
+
+        await expect(protocol.swidge({
+          fromToken: TOKEN, toToken: TOKEN, toChain: 'arbitrum', fromTokenAmount: 1_000_000n
+        })).rejects.toThrow('batch estimation failed')
+
+        expect(account.sendTransaction).toHaveBeenCalledTimes(1)
+        expect(account.sendTransaction.mock.calls[0][0]).toHaveLength(2)
+      })
+
+      test('does not wait between calls in the atomic ERC-4337 batch', async () => {
         await protocol.swidge({
           fromToken: TOKEN, toToken: TOKEN, toChain: 'arbitrum', fromTokenAmount: 1_000_000n
         })

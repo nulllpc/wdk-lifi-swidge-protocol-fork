@@ -44,14 +44,15 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
      * Executes a swap, bridge, or combined swap+bridge operation.
      * Handles ERC-20 approval automatically, granting only the exact amount required.
      * For tokens that revert on non-zero-to-non-zero approval (e.g. USDT on Ethereum),
-     * a reset-to-zero transaction is sent first.
+     * a reset-to-zero call is executed first. ERC-4337 accounts batch all required
+     * approval calls and the bridge call into one UserOperation.
      *
      * @param {SwidgeOptions} options - Route options: token pair, destination chain, amount (exact-in or exact-out), slippage, recipient,
      *   and the optional `minAmountOut` execution guard for quote-first flows — pass the `toTokenAmountMin` from a previously displayed
      *   `quoteSwidge()` result, and `swidge()` throws before any approval or transaction is sent if the fresh execution quote's
      *   `toAmountMin` falls below it. Not forwarded to LI.FI.
      * @param {LifiSwidgeProtocolConfig} [config] - Per-call overrides for fee caps and ERC-4337 config.
-     * @returns {Promise<SwidgeResult>} The bridge transaction hash (as `id` and `hash`), fees, all sent transactions, and quoted amounts.
+     * @returns {Promise<SwidgeResult>} The source operation hash (as `id` and `hash`), fees, all sent transactions, and quoted amounts.
      * @throws {LifiReadOnlyAccountError} If the bound account is read-only or absent.
      * @throws {LifiConfigurationError} If no connected provider is available.
      * @throws {LifiValidationError} If the options or the quote's transaction data fail validation.
@@ -90,6 +91,8 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
     private _checkNativeValueRequirement;
     /** @private */
     private _buildBridgeTx;
+    /** @private */
+    private _buildApprovalTxs;
     /** @private */
     private _handleApproval;
     /** @private */

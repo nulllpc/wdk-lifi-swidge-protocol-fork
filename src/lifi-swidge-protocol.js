@@ -215,14 +215,15 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
    * Executes a swap, bridge, or combined swap+bridge operation.
    * Handles ERC-20 approval automatically, granting only the exact amount required.
    * For tokens that revert on non-zero-to-non-zero approval (e.g. USDT on Ethereum),
-   * a reset-to-zero transaction is sent first.
+   * a reset-to-zero call is executed first. ERC-4337 accounts batch all required
+   * approval calls and the bridge call into one UserOperation.
    *
    * @param {SwidgeOptions} options - Route options: token pair, destination chain, amount (exact-in or exact-out), slippage, recipient,
    *   and the optional `minAmountOut` execution guard for quote-first flows — pass the `toTokenAmountMin` from a previously displayed
    *   `quoteSwidge()` result, and `swidge()` throws before any approval or transaction is sent if the fresh execution quote's
    *   `toAmountMin` falls below it. Not forwarded to LI.FI.
    * @param {LifiSwidgeProtocolConfig} [config] - Per-call overrides for fee caps and ERC-4337 config.
-   * @returns {Promise<SwidgeResult>} The bridge transaction hash (as `id` and `hash`), fees, all sent transactions, and quoted amounts.
+   * @returns {Promise<SwidgeResult>} The source operation hash (as `id` and `hash`), fees, all sent transactions, and quoted amounts.
    * @throws {LifiReadOnlyAccountError} If the bound account is read-only or absent.
    * @throws {LifiConfigurationError} If no connected provider is available.
    * @throws {LifiValidationError} If the options or the quote's transaction data fail validation.
@@ -275,21 +276,31 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
     validateQuoteTransaction(quote, fromChainId, effectiveConfig)
     this._checkNativeValueRequirement(quote, effectiveConfig)
 
-    const { approveHash, resetAllowanceHash } = await this._handleApproval(
-      fromToken,
-      fromAddress,
-      quote.estimate.approvalAddress,
-      BigInt(quote.estimate.fromAmount),
-      quote.estimate.skipApproval,
-      config
-    )
-
     const bridgeTx = this._buildBridgeTx(quote)
 
+    let approveHash
+    let resetAllowanceHash
     let bridgeHash
     if (this._isErc4337Account()) {
-      ;({ hash: bridgeHash } = await this._account.sendTransaction([bridgeTx], config))
+      const approvalTxs = await this._buildApprovalTxs(
+        fromToken,
+        fromAddress,
+        quote.estimate.approvalAddress,
+        BigInt(quote.estimate.fromAmount),
+        quote.estimate.skipApproval
+      )
+
+      // A single UserOperation keeps the Safe nonce stable while ensuring the
+      // allowance changes and bridge call execute atomically and in order.
+      ;({ hash: bridgeHash } = await this._account.sendTransaction([...approvalTxs, bridgeTx], config))
     } else {
+      ;({ approveHash, resetAllowanceHash } = await this._handleApproval(
+        fromToken,
+        fromAddress,
+        quote.estimate.approvalAddress,
+        BigInt(quote.estimate.fromAmount),
+        quote.estimate.skipApproval
+      ))
       ;({ hash: bridgeHash } = await this._account.sendTransaction(bridgeTx))
     }
 
@@ -667,45 +678,62 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
     }
   }
 
-  // Handles ERC-20 approval for the LI.FI Diamond contract. Grants the exact
-  // minimum required amount; for tokens that revert on direct non-zero-to-non-zero
-  // approval (e.g. USDT on Ethereum), resets the allowance to zero first.
+  // Builds the ordered ERC-20 calls needed before the LI.FI bridge call. For
+  // tokens that revert on direct non-zero-to-non-zero approval (e.g. USDT on
+  // Ethereum), the first call resets the allowance to zero.
   /** @private */
-  async _handleApproval (token, fromAddress, approvalAddress, amount, skipApproval, config) {
-    if (skipApproval) return {}
+  async _buildApprovalTxs (token, fromAddress, approvalAddress, amount, skipApproval) {
+    if (skipApproval) return []
 
     const tokenContract = new Contract(token, ERC20_ABI, this._provider)
     const currentAllowance = await tokenContract.allowance(fromAddress, approvalAddress)
 
-    if (currentAllowance >= amount) return {}
+    if (currentAllowance >= amount) return []
 
-    let resetAllowanceHash
+    const transactions = []
 
     if (currentAllowance > 0n) {
-      const resetTx = {
+      transactions.push({
         to: token,
         data: tokenContract.interface.encodeFunctionData('approve', [approvalAddress, 0n])
-      }
-      const result = this._isErc4337Account()
-        ? await this._account.sendTransaction([resetTx], config)
-        : await this._account.sendTransaction(resetTx)
-      resetAllowanceHash = result.hash
-      if (!this._isErc4337Account()) await this._provider.waitForTransaction(resetAllowanceHash)
+      })
     }
 
-    const approveTx = {
+    transactions.push({
       to: token,
       data: tokenContract.interface.encodeFunctionData('approve', [approvalAddress, amount])
+    })
+
+    return transactions
+  }
+
+  // EOA approvals are separate transactions and must be confirmed before the
+  // next approval or bridge transaction is submitted.
+  /** @private */
+  async _handleApproval (token, fromAddress, approvalAddress, amount, skipApproval) {
+    const approvalTxs = await this._buildApprovalTxs(
+      token,
+      fromAddress,
+      approvalAddress,
+      amount,
+      skipApproval
+    )
+
+    let approveHash
+    let resetAllowanceHash
+
+    for (let index = 0; index < approvalTxs.length; index++) {
+      const { hash } = await this._account.sendTransaction(approvalTxs[index])
+      await this._provider.waitForTransaction(hash)
+
+      if (approvalTxs.length > 1 && index === 0) {
+        resetAllowanceHash = hash
+      } else {
+        approveHash = hash
+      }
     }
-    const result = this._isErc4337Account()
-      ? await this._account.sendTransaction([approveTx], config)
-      : await this._account.sendTransaction(approveTx)
 
-    // Wait for confirmation before the bridge tx — without this the LI.FI Diamond's
-    // transferFrom arrives before the allowance is on-chain, causing TransferFromFailed().
-    if (!this._isErc4337Account()) await this._provider.waitForTransaction(result.hash)
-
-    return { approveHash: result.hash, resetAllowanceHash }
+    return { approveHash, resetAllowanceHash }
   }
 
   // Maps LI.FI's status/substatus pair to one of the nine canonical SwidgeStatus values.
