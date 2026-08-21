@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3
+
+### Patch Changes
+
+- [#8](https://github.com/lifinance/wdk-lifi-swidge-protocol/pull/8) [`5e2d913`](https://github.com/lifinance/wdk-lifi-swidge-protocol/commit/5e2d9131e8dc5362a933de8acf6cfede19ff6869) Thanks [@brucexu-eth](https://github.com/brucexu-eth)! - Resolve ERC-4337 UserOperation hashes to canonical source transaction hashes and fix the Bare runtime entry point.
+
 ## 0.5.2
 
 ### Patch Changes
