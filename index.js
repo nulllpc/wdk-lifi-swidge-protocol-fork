@@ -19,6 +19,7 @@ export { default, default as LifiSwidgeProtocol, NATIVE_VALUE_BRIDGE_DENY_LIST }
 /** @typedef {import('./src/lifi-swidge-protocol.js').LifiSwidgeProtocolConfig} LifiSwidgeProtocolConfig */
 /** @typedef {import('./src/lifi-swidge-protocol.js').LifiRouteOrder} LifiRouteOrder */
 /** @typedef {import('./src/lifi-swidge-protocol.js').SwidgeStatusOptions} SwidgeStatusOptions */
+/** @typedef {import('./src/lifi-swidge-protocol.js').LifiSwidgeResult} LifiSwidgeResult */
 
 export {
   LifiProtocolError,

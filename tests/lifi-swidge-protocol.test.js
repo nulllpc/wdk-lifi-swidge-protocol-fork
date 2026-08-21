@@ -123,6 +123,8 @@ const DUMMY_TOKENS = {
 
 const LIFI_API = 'https://li.quest/v1'
 const NATIVE_VALUE_DENY_BRIDGES_QUERY = 'glacis%2CstargateV2%2CstargateV2Bus%2Csquid%2Carbitrum%2CgasZipBridge'
+const DUMMY_USER_OP_HASH = '0xuser-operation-hash'
+const DUMMY_SOURCE_TX_HASH = '0xcanonical-source-transaction-hash'
 
 // Second fetch argument produced by the request layer; the abort signal is the
 // only value that genuinely cannot be predicted.
@@ -167,6 +169,7 @@ jest.unstable_mockModule('ethers', () => ({
 const {
   LifiSwidgeProtocol,
   NATIVE_VALUE_BRIDGE_DENY_LIST,
+  LifiExecutionError,
   LifiQuoteError,
   LifiStatusError,
   LifiSlippageError
@@ -568,6 +571,7 @@ describe('@lifi/wdk-protocol-swidge-lifi', () => {
 
         expect(result.id).toBe('dummy-bridge-hash')
         expect(result.hash).toBe('dummy-bridge-hash')
+        expect(result.txHashUnresolved).toBeUndefined()
         expect(result.fromTokenAmount).toBe(1_000_000n)
         expect(result.toTokenAmount).toBe(999_700n)
         expect(result.toTokenAmountMin).toBe(994_700n)
@@ -1111,16 +1115,24 @@ describe('@lifi/wdk-protocol-swidge-lifi', () => {
       // The ERC-4337 address is a counterfactual smart-account address (not the
       // EOA derivation), so it is mocked rather than derived.
       account.getAddress = jest.fn().mockResolvedValue(USER_ADDRESS)
+      account.getUserOperationReceipt = jest.fn().mockResolvedValue({
+        success: true,
+        receipt: { transactionHash: DUMMY_SOURCE_TX_HASH }
+      })
       protocol = new LifiSwidgeProtocol(account)
       getNetworkMock.mockResolvedValue({ chainId: 1n })
       waitForTransactionMock.mockClear()
       mockFetch()
     })
 
+    afterEach(() => {
+      jest.useRealTimers()
+    })
+
     describe('swidge', () => {
       beforeEach(() => {
         allowanceMock.mockResolvedValue(0n)
-        account.sendTransaction = jest.fn().mockResolvedValue({ hash: 'dummy-batch-hash' })
+        account.sendTransaction = jest.fn().mockResolvedValue({ hash: DUMMY_USER_OP_HASH })
       })
 
       test('submits approval and bridge in one ordered ERC-4337 batch', async () => {
@@ -1138,11 +1150,77 @@ describe('@lifi/wdk-protocol-swidge-lifi', () => {
             gasLimit: 300_000n
           }
         ], undefined)
-        expect(result.id).toBe('dummy-batch-hash')
-        expect(result.hash).toBe('dummy-batch-hash')
+        expect(account.getUserOperationReceipt).toHaveBeenCalledWith(DUMMY_USER_OP_HASH)
+        expect(result.id).toBe(DUMMY_SOURCE_TX_HASH)
+        expect(result.hash).toBe(DUMMY_SOURCE_TX_HASH)
         expect(result.transactions).toEqual([
-          { hash: 'dummy-batch-hash', chain: 1, type: 'source' }
+          { hash: DUMMY_SOURCE_TX_HASH, chain: 1, type: 'source' }
         ])
+      })
+
+      test('polls until the canonical ERC-4337 transaction hash is available', async () => {
+        jest.useFakeTimers()
+        account.getUserOperationReceipt
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({
+            success: true,
+            receipt: { transactionHash: DUMMY_SOURCE_TX_HASH }
+          })
+
+        const hashPromise = protocol._resolveUserOpTxHash(DUMMY_USER_OP_HASH)
+        await jest.advanceTimersByTimeAsync(2_000)
+
+        await expect(hashPromise).resolves.toBe(DUMMY_SOURCE_TX_HASH)
+        expect(account.getUserOperationReceipt).toHaveBeenCalledTimes(2)
+      })
+
+      test('throws when the included ERC-4337 UserOperation reverted', async () => {
+        account.getUserOperationReceipt.mockResolvedValueOnce({
+          success: false,
+          receipt: { transactionHash: DUMMY_SOURCE_TX_HASH }
+        })
+
+        await expect(protocol.swidge({
+          fromToken: TOKEN, toToken: TOKEN, toChain: 'arbitrum', fromTokenAmount: 1_000_000n
+        })).rejects.toThrow(LifiExecutionError)
+      })
+
+      test('returns the UserOperation hash with an unresolved marker after the deadline', async () => {
+        protocol._resolveUserOpTxHash = jest.fn().mockResolvedValue(null)
+
+        const result = await protocol.swidge({
+          fromToken: TOKEN, toToken: TOKEN, toChain: 'arbitrum', fromTokenAmount: 1_000_000n
+        })
+
+        expect(result.id).toBe(DUMMY_USER_OP_HASH)
+        expect(result.hash).toBe(DUMMY_USER_OP_HASH)
+        expect(result.txHashUnresolved).toBe(true)
+        expect(result.transactions).toEqual([
+          { hash: DUMMY_USER_OP_HASH, chain: 1, type: 'source' }
+        ])
+      })
+
+      test('returns unresolved when the overall receipt deadline expires', async () => {
+        jest.useFakeTimers()
+        account.getUserOperationReceipt.mockResolvedValue(null)
+        const warning = jest.spyOn(console, 'warn').mockImplementation(() => {})
+
+        const hashPromise = protocol._resolveUserOpTxHash(DUMMY_USER_OP_HASH)
+        await jest.advanceTimersByTimeAsync(300_000)
+
+        await expect(hashPromise).resolves.toBeNull()
+        expect(warning).toHaveBeenCalledWith(expect.stringContaining('source transaction hash is unresolved'))
+        warning.mockRestore()
+      })
+
+      test('caps an individual UserOperation receipt read', async () => {
+        jest.useFakeTimers()
+        account.getUserOperationReceipt.mockImplementation(() => new Promise(() => {}))
+
+        const receiptPromise = protocol._readUserOpReceipt(DUMMY_USER_OP_HASH, 15_000)
+        await jest.advanceTimersByTimeAsync(15_000)
+
+        await expect(receiptPromise).resolves.toBeNull()
       })
 
       test('sends no route filters in the quote request by default', async () => {
@@ -1175,7 +1253,7 @@ describe('@lifi/wdk-protocol-swidge-lifi', () => {
           }
         ])
         expect(result.transactions).toEqual([
-          { hash: 'dummy-batch-hash', chain: 1, type: 'source' }
+          { hash: DUMMY_SOURCE_TX_HASH, chain: 1, type: 'source' }
         ])
       })
 
