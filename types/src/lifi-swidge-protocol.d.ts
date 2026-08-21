@@ -52,7 +52,7 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
      *   `quoteSwidge()` result, and `swidge()` throws before any approval or transaction is sent if the fresh execution quote's
      *   `toAmountMin` falls below it. Not forwarded to LI.FI.
      * @param {LifiSwidgeProtocolConfig} [config] - Per-call overrides for fee caps and ERC-4337 config.
-     * @returns {Promise<SwidgeResult>} The source operation hash (as `id` and `hash`), fees, all sent transactions, and quoted amounts.
+     * @returns {Promise<LifiSwidgeResult>} The canonical source transaction hash (as `id` and `hash`), fees, all sent transactions, and quoted amounts.
      * @throws {LifiReadOnlyAccountError} If the bound account is read-only or absent.
      * @throws {LifiConfigurationError} If no connected provider is available.
      * @throws {LifiValidationError} If the options or the quote's transaction data fail validation.
@@ -60,7 +60,7 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
      * @throws {LifiUntrustedContractError} If `trustedContracts` is enabled and the quote targets an unknown contract.
      * @throws {LifiQuoteError} If LI.FI cannot produce a route or the quote API request fails.
      */
-    swidge(options: SwidgeOptions, config?: LifiSwidgeProtocolConfig): Promise<SwidgeResult>;
+    swidge(options: SwidgeOptions, config?: LifiSwidgeProtocolConfig): Promise<LifiSwidgeResult>;
     /** @private */
     private _getChainId;
     /** @private */
@@ -95,6 +95,27 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
     private _buildApprovalTxs;
     /** @private */
     private _handleApproval;
+    /**
+     * Bounds an individual bundler receipt read. The underlying ERC-4337
+     * transport does not expose an AbortSignal, so a stalled request cannot be
+     * cancelled here and is treated the same as a receipt that is not ready.
+     *
+     * @private
+     * @param {string} userOpHash
+     * @param {number} timeout
+     * @returns {Promise<object | null>}
+     */
+    private _readUserOpReceipt;
+    /**
+     * Resolves a bundler UserOperation hash to its canonical on-chain
+     * transaction hash.
+     *
+     * @private
+     * @param {string} userOpHash
+     * @returns {Promise<string | null>}
+     * @throws {LifiExecutionError} If the included UserOperation reverted.
+     */
+    private _resolveUserOpTxHash;
     /** @private */
     private _mapLifiStatus;
     /** @private */
@@ -109,6 +130,9 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
 export type SwidgeOptions = import("@tetherto/wdk-wallet/protocols").SwidgeOptions;
 export type SwidgeQuote = import("@tetherto/wdk-wallet/protocols").SwidgeQuote;
 export type SwidgeResult = import("@tetherto/wdk-wallet/protocols").SwidgeResult;
+export type LifiSwidgeResult = SwidgeResult & {
+    txHashUnresolved?: boolean;
+};
 export type SwidgeStatusResult = import("@tetherto/wdk-wallet/protocols").SwidgeStatusResult;
 export type SwidgeSupportedChain = import("@tetherto/wdk-wallet/protocols").SwidgeSupportedChain;
 export type SwidgeSupportedToken = import("@tetherto/wdk-wallet/protocols").SwidgeSupportedToken;

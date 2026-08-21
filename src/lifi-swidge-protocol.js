@@ -29,9 +29,14 @@ import {
   LifiUnsupportedChainError
 } from './errors.js'
 
+const USER_OP_POLL_INTERVAL_MS = 2_000
+const USER_OP_POLL_TIMEOUT_MS = 300_000
+const USER_OP_RECEIPT_READ_TIMEOUT_MS = 15_000
+
 /** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeOptions} SwidgeOptions */
 /** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeQuote} SwidgeQuote */
 /** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeResult} SwidgeResult */
+/** @typedef {SwidgeResult & { txHashUnresolved?: boolean }} LifiSwidgeResult */
 /** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeStatusResult} SwidgeStatusResult */
 /** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeSupportedChain} SwidgeSupportedChain */
 /** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeSupportedToken} SwidgeSupportedToken */
@@ -223,7 +228,7 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
    *   `quoteSwidge()` result, and `swidge()` throws before any approval or transaction is sent if the fresh execution quote's
    *   `toAmountMin` falls below it. Not forwarded to LI.FI.
    * @param {LifiSwidgeProtocolConfig} [config] - Per-call overrides for fee caps and ERC-4337 config.
-   * @returns {Promise<SwidgeResult>} The source operation hash (as `id` and `hash`), fees, all sent transactions, and quoted amounts.
+   * @returns {Promise<LifiSwidgeResult>} The canonical source transaction hash (as `id` and `hash`), fees, all sent transactions, and quoted amounts.
    * @throws {LifiReadOnlyAccountError} If the bound account is read-only or absent.
    * @throws {LifiConfigurationError} If no connected provider is available.
    * @throws {LifiValidationError} If the options or the quote's transaction data fail validation.
@@ -281,6 +286,7 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
     let approveHash
     let resetAllowanceHash
     let bridgeHash
+    let txHashUnresolved = false
     if (this._isErc4337Account()) {
       const approvalTxs = await this._buildApprovalTxs(
         fromToken,
@@ -293,6 +299,9 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
       // A single UserOperation keeps the Safe nonce stable while ensuring the
       // allowance changes and bridge call execute atomically and in order.
       ;({ hash: bridgeHash } = await this._account.sendTransaction([...approvalTxs, bridgeTx], config))
+      const resolvedTxHash = await this._resolveUserOpTxHash(bridgeHash)
+      txHashUnresolved = resolvedTxHash === null
+      bridgeHash = resolvedTxHash ?? bridgeHash
     } else {
       ;({ approveHash, resetAllowanceHash } = await this._handleApproval(
         fromToken,
@@ -316,6 +325,7 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
     return {
       id: bridgeHash,
       hash: bridgeHash,
+      ...(txHashUnresolved && { txHashUnresolved: true }),
       fees: this._buildFees(quote),
       transactions,
       fromTokenAmount: BigInt(quote.estimate.fromAmount),
@@ -734,6 +744,77 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
     }
 
     return { approveHash, resetAllowanceHash }
+  }
+
+  /**
+   * Bounds an individual bundler receipt read. The underlying ERC-4337
+   * transport does not expose an AbortSignal, so a stalled request cannot be
+   * cancelled here and is treated the same as a receipt that is not ready.
+   *
+   * @private
+   * @param {string} userOpHash
+   * @param {number} timeout
+   * @returns {Promise<object | null>}
+   */
+  async _readUserOpReceipt (userOpHash, timeout) {
+    let timer
+    try {
+      return await Promise.race([
+        this._account.getUserOperationReceipt(userOpHash),
+        new Promise(resolve => {
+          timer = setTimeout(() => resolve(null), timeout)
+        })
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
+  /**
+   * Resolves a bundler UserOperation hash to its canonical on-chain
+   * transaction hash.
+   *
+   * @private
+   * @param {string} userOpHash
+   * @returns {Promise<string | null>}
+   * @throws {LifiExecutionError} If the included UserOperation reverted.
+   */
+  async _resolveUserOpTxHash (userOpHash) {
+    const deadline = Date.now() + USER_OP_POLL_TIMEOUT_MS
+
+    while (Date.now() < deadline) {
+      const remaining = deadline - Date.now()
+      let receipt = null
+
+      try {
+        receipt = await this._readUserOpReceipt(
+          userOpHash,
+          Math.min(USER_OP_RECEIPT_READ_TIMEOUT_MS, remaining)
+        )
+      } catch {
+        // Some bundlers return an error while an operation is still pending.
+      }
+
+      if (receipt) {
+        if (receipt.success === false) {
+          throw new LifiExecutionError(
+            `User operation ${userOpHash} reverted (tx ${receipt.receipt?.transactionHash ?? 'unknown'}). Nothing was bridged.`
+          )
+        }
+
+        const txHash = receipt.receipt?.transactionHash
+        if (txHash) return txHash
+      }
+
+      const delay = Math.min(USER_OP_POLL_INTERVAL_MS, deadline - Date.now())
+      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay))
+    }
+
+    console.warn(
+      `[lifi] user operation ${userOpHash} was not included within ${USER_OP_POLL_TIMEOUT_MS}ms; ` +
+      'the source transaction hash is unresolved'
+    )
+    return null
   }
 
   // Maps LI.FI's status/substatus pair to one of the nine canonical SwidgeStatus values.
