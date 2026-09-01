@@ -24,10 +24,10 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
      * Only `quoteSwidge`, `getSwidgeStatus`, `getSupportedChains`, and `getSupportedTokens` are available.
      *
      * @overload
-     * @param {WalletAccountReadOnlyEvm} account - Read-only account used to derive the source address for quotes.
+     * @param {WalletAccountReadOnlyEvm | WalletAccountReadOnlyEvmErc4337} account - Read-only EOA or ERC-4337 account used to derive the source address and quote fees.
      * @param {LifiSwidgeProtocolConfig} [config] - Fee caps, LI.FI routing options, and reliability/security settings.
      */
-    constructor(account: WalletAccountReadOnlyEvm, config?: LifiSwidgeProtocolConfig | undefined);
+    constructor(account: WalletAccountReadOnlyEvm | WalletAccountReadOnlyEvmErc4337, config?: LifiSwidgeProtocolConfig | undefined);
     /**
      * Creates a full LI.FI Swidge protocol capable of executing swap and bridge operations.
      *
@@ -162,6 +162,7 @@ export type SwidgeSupportedTokensOptions = import("@tetherto/wdk-wallet/protocol
 export type WalletAccountEvm = import("@tetherto/wdk-wallet-evm").WalletAccountEvm;
 export type WalletAccountReadOnlyEvm = import("@tetherto/wdk-wallet-evm").WalletAccountReadOnlyEvm;
 export type WalletAccountEvmErc4337 = import("@tetherto/wdk-wallet-evm-erc-4337").WalletAccountEvmErc4337;
+export type WalletAccountReadOnlyEvmErc4337 = import("@tetherto/wdk-wallet-evm-erc-4337").WalletAccountReadOnlyEvmErc4337;
 export type EvmErc4337WalletConfig = import("@tetherto/wdk-wallet-evm-erc-4337").EvmErc4337WalletConfig;
 export type Eip1193Provider = import("ethers").Eip1193Provider;
 /**

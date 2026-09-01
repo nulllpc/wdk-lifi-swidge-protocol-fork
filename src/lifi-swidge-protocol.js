@@ -45,6 +45,7 @@ const USER_OP_RECEIPT_READ_TIMEOUT_MS = 15_000
 /** @typedef {import('@tetherto/wdk-wallet-evm').WalletAccountEvm} WalletAccountEvm */
 /** @typedef {import('@tetherto/wdk-wallet-evm').WalletAccountReadOnlyEvm} WalletAccountReadOnlyEvm */
 /** @typedef {import('@tetherto/wdk-wallet-evm-erc-4337').WalletAccountEvmErc4337} WalletAccountEvmErc4337 */
+/** @typedef {import('@tetherto/wdk-wallet-evm-erc-4337').WalletAccountReadOnlyEvmErc4337} WalletAccountReadOnlyEvmErc4337 */
 /** @typedef {import('@tetherto/wdk-wallet-evm-erc-4337').EvmErc4337WalletConfig} EvmErc4337WalletConfig */
 /** @typedef {import('ethers').Eip1193Provider} Eip1193Provider */
 
@@ -139,7 +140,7 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
    * Only `quoteSwidge`, `getSwidgeStatus`, `getSupportedChains`, and `getSupportedTokens` are available.
    *
    * @overload
-   * @param {WalletAccountReadOnlyEvm} account - Read-only account used to derive the source address for quotes.
+   * @param {WalletAccountReadOnlyEvm | WalletAccountReadOnlyEvmErc4337} account - Read-only EOA or ERC-4337 account used to derive the source address and quote fees.
    * @param {LifiSwidgeProtocolConfig} [config] - Fee caps, LI.FI routing options, and reliability/security settings.
    */
 
