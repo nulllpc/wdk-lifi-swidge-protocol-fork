@@ -726,13 +726,15 @@ export default class LifiSwidgeProtocol extends SwidgeProtocol {
     if (currentAllowance > 0n) {
       transactions.push({
         to: token,
-        data: tokenContract.interface.encodeFunctionData('approve', [approvalAddress, 0n])
+        data: tokenContract.interface.encodeFunctionData('approve', [approvalAddress, 0n]),
+        value: 0n
       })
     }
 
     transactions.push({
       to: token,
-      data: tokenContract.interface.encodeFunctionData('approve', [approvalAddress, amount])
+      data: tokenContract.interface.encodeFunctionData('approve', [approvalAddress, amount]),
+      value: 0n
     })
 
     return transactions

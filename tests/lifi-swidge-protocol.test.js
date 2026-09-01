@@ -1144,7 +1144,7 @@ describe('@lifi/wdk-protocol-swidge-lifi', () => {
 
         expect(account.sendTransaction).toHaveBeenCalledTimes(1)
         expect(account.sendTransaction).toHaveBeenCalledWith([
-          { to: TOKEN, data: EXPECTED_APPROVE_DATA },
+          { to: TOKEN, data: EXPECTED_APPROVE_DATA, value: 0n },
           {
             to: APPROVAL_ADDRESS,
             data: DUMMY_QUOTE.transactionRequest.data,
@@ -1245,8 +1245,8 @@ describe('@lifi/wdk-protocol-swidge-lifi', () => {
 
         expect(account.sendTransaction).toHaveBeenCalledTimes(1)
         expect(account.sendTransaction.mock.calls[0][0]).toEqual([
-          { to: TOKEN, data: EXPECTED_RESET_DATA },
-          { to: TOKEN, data: EXPECTED_APPROVE_DATA },
+          { to: TOKEN, data: EXPECTED_RESET_DATA, value: 0n },
+          { to: TOKEN, data: EXPECTED_APPROVE_DATA, value: 0n },
           {
             to: APPROVAL_ADDRESS,
             data: DUMMY_QUOTE.transactionRequest.data,
@@ -1386,7 +1386,7 @@ describe('@lifi/wdk-protocol-swidge-lifi', () => {
         })
 
         expect(account.quoteSendTransaction).toHaveBeenCalledWith([
-          { to: TOKEN, data: EXPECTED_APPROVE_DATA },
+          { to: TOKEN, data: EXPECTED_APPROVE_DATA, value: 0n },
           {
             to: APPROVAL_ADDRESS,
             data: DUMMY_QUOTE.transactionRequest.data,
@@ -1523,7 +1523,7 @@ describe('@lifi/wdk-protocol-swidge-lifi', () => {
       })
 
       expect(account.quoteSendTransaction).toHaveBeenCalledWith([
-        { to: TOKEN, data: EXPECTED_APPROVE_DATA },
+        { to: TOKEN, data: EXPECTED_APPROVE_DATA, value: 0n },
         {
           to: APPROVAL_ADDRESS,
           data: DUMMY_QUOTE.transactionRequest.data,
